@@ -1,0 +1,79 @@
+name: Deploy Flutter Web to VPS (Zero Downtime)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps-zero-downtime
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      - name: Build Web Release
+        run: flutter build web --release
+
+      - name: Upload Build to VPS Temp Folder
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "build/web/*"
+          target: "/tmp/deploylabz-site-release"
+          strip_components: 2
+          overwrite: true
+
+      - name: Publish Release and Switch Symlink
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            TARGET_LINK="${{ secrets.VPS_TARGET_DIR }}"
+            RELEASES_DIR="${TARGET_LINK}_releases"
+            TMP_DIR="/tmp/deploylabz-site-release"
+            KEEP_RELEASES=5
+
+            if [ ! -d "$TMP_DIR" ]; then
+              echo "Temporary deploy folder not found: $TMP_DIR"
+              exit 1
+            fi
+
+            mkdir -p "$RELEASES_DIR"
+            RELEASE_ID="$(date -u +%Y%m%d%H%M%S)"
+            NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
+            mkdir -p "$NEW_RELEASE"
+
+            cp -a "$TMP_DIR"/. "$NEW_RELEASE"/
+            ln -sfn "$NEW_RELEASE" "$TARGET_LINK"
+
+            rm -rf "$TMP_DIR"
+
+            if [ -d "$RELEASES_DIR" ]; then
+              ls -1dt "$RELEASES_DIR"/* 2>/dev/null | tail -n +$((KEEP_RELEASES + 1)) | xargs -r rm -rf
+            fi
+
+            echo "Switched current release to: $NEW_RELEASE"
+            echo "Deploy completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

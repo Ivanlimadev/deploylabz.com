@@ -1,0 +1,66 @@
+name: Deploy Flutter Web to VPS (Direct Replace)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      - name: Build Web Release
+        run: flutter build web --release
+
+      - name: Upload Build to VPS Temp Folder
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "build/web/*"
+          target: "/tmp/deploylabz-site-release"
+          strip_components: 2
+          overwrite: true
+
+      - name: Publish Build on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            TARGET_DIR="${{ secrets.VPS_TARGET_DIR }}"
+            TMP_DIR="/tmp/deploylabz-site-release"
+
+            if [ ! -d "$TMP_DIR" ]; then
+              echo "Temporary deploy folder not found: $TMP_DIR"
+              exit 1
+            fi
+
+            mkdir -p "$TARGET_DIR"
+            find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+            cp -a "$TMP_DIR"/. "$TARGET_DIR"/
+
+            # Optional: clean temporary folder after publish
+            rm -rf "$TMP_DIR"
+
+            echo "Deploy completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
